@@ -2,10 +2,8 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import re
-import io
 import sys
 from pathlib import Path
-from importlib.util import find_spec
 
 # ========================== INTERNAL SETTINGS ==========================
 DB_FILE = "nanpa.db"   # Hidden - Not shown anywhere in UI
@@ -23,6 +21,22 @@ except Exception:
     phone_timezone = None
 
 # ========================== DATA LOADER ================================
+US_STATE_NAMES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+    "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
+    "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+    "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+    "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+    "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+    "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
+    "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+    "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia"
+}
+
 def load_nanpa():
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -31,6 +45,9 @@ def load_nanpa():
         for col in ["prefix", "company", "line_type", "state", "city", "timezone"]:
             if col not in df.columns:
                 df[col] = ""
+        df["prefix"] = df["prefix"].astype(str).str.extract(r"(\d{6})", expand=False).fillna("")
+        for col in ["state", "city", "timezone"]:
+            df[col] = df[col].fillna("").astype(str).str.strip()
         df["company"] = df["company"].astype(str).apply(lambda x: x.strip().strip('"').strip("'"))
         return df
     except:
@@ -51,14 +68,8 @@ def split_pasted_numbers(raw_text):
     return numbers
 
 def build_download_file(df, base_name):
-    if find_spec("openpyxl") is not None:
-        buf = io.BytesIO()
-        df.to_excel(buf, index=False)
-        return buf.getvalue(), f"{base_name}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", None
-
     csv_data = df.to_csv(index=False).encode("utf-8")
-    warning = "Excel export needs `openpyxl`, so this download is being provided as CSV instead."
-    return csv_data, f"{base_name}.csv", "text/csv", warning
+    return csv_data, f"{base_name}.csv", "text/csv", None
 
 KNOWN_VOIP = [
     "twilio","vonage","bandwidth","level 3","level3",
@@ -83,7 +94,51 @@ def clean_text(value):
         return ""
     return text
 
-def lookup_location(num):
+def extract_city(description, state):
+    description_value = clean_text(description)
+    if not description_value:
+        return ""
+
+    parts = [clean_text(part) for part in description_value.split(",") if clean_text(part)]
+    candidate = parts[0] if parts else description_value
+    state_code = clean_text(state).upper()
+    state_name = US_STATE_NAMES.get(state_code, "").lower()
+    candidate_lower = candidate.lower()
+
+    if candidate_lower in {"united states", "canada"}:
+        return ""
+    if state_name and candidate_lower == state_name:
+        return ""
+    if state_code and candidate_lower == state_code.lower():
+        return ""
+    return candidate
+
+def persist_location(prefix, city, timezone):
+    if not prefix or (not city and not timezone):
+        return
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.cursor()
+        columns = {row[1] for row in cur.execute("PRAGMA table_info(nanpa_prefixes)").fetchall()}
+        if "city" not in columns:
+            cur.execute("ALTER TABLE nanpa_prefixes ADD COLUMN city TEXT")
+        if "timezone" not in columns:
+            cur.execute("ALTER TABLE nanpa_prefixes ADD COLUMN timezone TEXT")
+        cur.execute(
+            """
+            UPDATE nanpa_prefixes
+            SET city = COALESCE(NULLIF(TRIM(city), ''), ?),
+                timezone = COALESCE(NULLIF(TRIM(timezone), ''), ?)
+            WHERE prefix = ?
+            """,
+            (city, timezone, prefix),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+def lookup_location(num, state=""):
     if not phonenumbers:
         return "", ""
     try:
@@ -92,10 +147,7 @@ def lookup_location(num):
             return "", ""
 
         description = clean_text(geocoder.description_for_number(parsed, "en"))
-        if "," in description:
-            city = clean_text(description.split(",", 1)[0])
-        else:
-            city = ""
+        city = extract_city(description, state)
 
         timezones = phone_timezone.time_zones_for_number(parsed)
         timezone_value = ", ".join(timezones) if timezones else ""
@@ -119,9 +171,13 @@ def nanpa_lookup(num):
     timezone = clean_text(r.get("timezone", ""))
 
     if not city or not timezone:
-        detected_city, detected_timezone = lookup_location(num)
+        detected_city, detected_timezone = lookup_location(num, state)
         city = city or detected_city
         timezone = timezone or detected_timezone
+        if detected_city or detected_timezone:
+            NANPA.loc[NANPA["prefix"] == pref, "city"] = city
+            NANPA.loc[NANPA["prefix"] == pref, "timezone"] = timezone
+            persist_location(pref, city, timezone)
 
     city = city or "Unknown"
     timezone = timezone or "Unknown"
