@@ -3,23 +3,38 @@ import pandas as pd
 import sqlite3
 import re
 import io
+import sys
+from pathlib import Path
 from importlib.util import find_spec
 
 # ========================== INTERNAL SETTINGS ==========================
 DB_FILE = "nanpa.db"   # Hidden - Not shown anywhere in UI
+VENV_SITE_PACKAGES = Path(__file__).resolve().parent / "venv" / "Lib" / "site-packages"
+
+if VENV_SITE_PACKAGES.exists():
+    sys.path.append(str(VENV_SITE_PACKAGES))
+
+try:
+    import phonenumbers
+    from phonenumbers import geocoder, timezone as phone_timezone
+except Exception:
+    phonenumbers = None
+    geocoder = None
+    phone_timezone = None
 
 # ========================== DATA LOADER ================================
 def load_nanpa():
     try:
         conn = sqlite3.connect(DB_FILE)
-        df = pd.read_sql_query(
-            "SELECT prefix, company, line_type, state FROM nanpa_prefixes", conn
-        )
+        df = pd.read_sql_query("SELECT * FROM nanpa_prefixes", conn)
         conn.close()
+        for col in ["prefix", "company", "line_type", "state", "city", "timezone"]:
+            if col not in df.columns:
+                df[col] = ""
         df["company"] = df["company"].astype(str).apply(lambda x: x.strip().strip('"').strip("'"))
         return df
     except:
-        return pd.DataFrame(columns=["prefix", "company", "line_type", "state"])
+        return pd.DataFrame(columns=["prefix", "company", "line_type", "state", "city", "timezone"])
 
 NANPA = load_nanpa()
 
@@ -59,16 +74,98 @@ def detect_voip(company, line_type):
         return True
     return False
 
+def yes_no(value):
+    return "Yes" if value else "No"
+
+def clean_text(value):
+    text = str(value or "").strip()
+    if not text or text.lower() == "nan":
+        return ""
+    return text
+
+def lookup_location(num):
+    if not phonenumbers:
+        return "", ""
+    try:
+        parsed = phonenumbers.parse(str(num), "US")
+        if not phonenumbers.is_possible_number(parsed):
+            return "", ""
+
+        description = clean_text(geocoder.description_for_number(parsed, "en"))
+        if "," in description:
+            city = clean_text(description.split(",", 1)[0])
+        else:
+            city = ""
+
+        timezones = phone_timezone.time_zones_for_number(parsed)
+        timezone_value = ", ".join(timezones) if timezones else ""
+        return city, timezone_value
+    except Exception:
+        return "", ""
+
 def nanpa_lookup(num):
     c = clean_number(num)
     if len(c) < 6:
-        return "", "", ""
+        return "", "", "", "", ""
     pref = c[:6]
     row = NANPA[NANPA["prefix"] == pref]
     if row.empty:
-        return "", "", ""
+        return "", "", "", "", ""
     r = row.iloc[0]
-    return r["company"], r["line_type"], r["state"]
+    company = clean_text(r.get("company", ""))
+    line_type = clean_text(r.get("line_type", ""))
+    state = clean_text(r.get("state", ""))
+    city = clean_text(r.get("city", ""))
+    timezone = clean_text(r.get("timezone", ""))
+
+    if not city or not timezone:
+        detected_city, detected_timezone = lookup_location(num)
+        city = city or detected_city
+        timezone = timezone or detected_timezone
+
+    city = city or "Unknown"
+    timezone = timezone or "Unknown"
+    return company, line_type, state, city, timezone
+
+def filter_by_line_type(df, selected_line_type):
+    if selected_line_type == "All":
+        return df
+    return df[df["Line Type"] == selected_line_type]
+
+def render_bulk_results(results_key, filter_key, download_label, base_name, max_rows=None):
+    final = st.session_state.get(results_key)
+    if final is None or final.empty:
+        return
+
+    line_type_options = ["All"] + sorted(
+        value for value in final["Line Type"].fillna("").unique() if str(value).strip()
+    )
+    selected_line_type = st.selectbox(
+        "Filter by line type",
+        line_type_options,
+        key=filter_key
+    )
+
+    filtered = filter_by_line_type(final, selected_line_type)
+    display_df = filtered.head(max_rows) if max_rows else filtered
+
+    st.write(f"Showing **{len(filtered)}** result(s).")
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        column_config={
+            "Company": None,
+            "Is_VoIP": None
+        }
+    )
+
+    download_data, download_name, mime_type, _ = build_download_file(filtered, base_name)
+    st.download_button(
+        download_label,
+        data=download_data,
+        file_name=download_name,
+        mime=mime_type
+    )
 
 # ========================== UI SETTINGS =================================
 st.set_page_config(page_title="HiQain Validator", layout="centered")
@@ -90,7 +187,7 @@ if st.button("Validate Number", use_container_width=True):
     if not phone:
         st.warning("Please enter a phone number.")
     else:
-        comp, ltype, state = nanpa_lookup(phone)
+        comp, ltype, state, city, timezone = nanpa_lookup(phone)
         is_voip = detect_voip(comp, ltype)
 
         # Output card - clean & modern like Veriphone
@@ -104,6 +201,8 @@ if st.button("Validate Number", use_container_width=True):
         st.write("**Carrier / Company:**", comp if comp else "Unknown")
         st.write("**Line Type:**", ltype if ltype else "Unknown")
         st.write("**State:**", state if state else "Unknown")
+        st.write("**City:**", city if city else "Unknown")
+        st.write("**Timezone:**", timezone if timezone else "Unknown")
 
         if is_voip:
             st.success("This appears to be a **VoIP number**.")
@@ -125,31 +224,27 @@ if file:
     if st.button("Run Bulk Validation"):
         out = []
         for p in df[phone_col]:
-            comp, ltype, state = nanpa_lookup(p)
+            comp, ltype, state, city, timezone = nanpa_lookup(p)
             out.append({
                 "Original": p,
                 "Cleaned": clean_number(p),
                 "Company": comp,
                 "Line Type": ltype,
                 "State": state,
-                "Is_VoIP": detect_voip(comp, ltype)
+                "City": city,
+                "Timezone": timezone,
+                "Is_VoIP": yes_no(detect_voip(comp, ltype))
             })
 
-        final = pd.DataFrame(out)
-        st.dataframe(final.head(200))
+        st.session_state["bulk_validation_results"] = pd.DataFrame(out)
 
-        download_data, download_name, mime_type, download_warning = build_download_file(
-            final, "hiqain_validated"
-        )
-        if download_warning:
-            st.info(download_warning)
-
-        st.download_button(
-            "Download Results",
-            data=download_data,
-            file_name=download_name,
-            mime=mime_type
-        )
+    render_bulk_results(
+        "bulk_validation_results",
+        "bulk_line_type_filter",
+        "Download Results",
+        "hiqain_validated",
+        max_rows=200
+    )
 
 # ========================== PASTE BULK VALIDATOR =======================
 st.write("---")
@@ -176,28 +271,22 @@ if st.button("Run Paste Validation", use_container_width=True):
     else:
         out = []
         for p in parsed_numbers:
-            comp, ltype, state = nanpa_lookup(p)
+            comp, ltype, state, city, timezone = nanpa_lookup(p)
             out.append({
                 "Original": p,
-                "Cleaned": clean_number(p),
                 "Company": comp,
                 "Line Type": ltype,
                 "State": state,
-                "Is_VoIP": detect_voip(comp, ltype)
+                "City": city,
+                "Timezone": timezone,
+                "Is_VoIP": yes_no(detect_voip(comp, ltype))
             })
 
-        final = pd.DataFrame(out)
-        st.dataframe(final, use_container_width=True)
+        st.session_state["paste_validation_results"] = pd.DataFrame(out)
 
-        download_data, download_name, mime_type, download_warning = build_download_file(
-            final, "hiqain_pasted_validated"
-        )
-        if download_warning:
-            st.info(download_warning)
-
-        st.download_button(
-            "Download Pasted Results",
-            data=download_data,
-            file_name=download_name,
-            mime=mime_type
-        )
+render_bulk_results(
+    "paste_validation_results",
+    "paste_line_type_filter",
+    "Download Pasted Results",
+    "hiqain_pasted_validated"
+)
