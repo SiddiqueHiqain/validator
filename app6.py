@@ -37,6 +37,37 @@ US_STATE_NAMES = {
     "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia"
 }
 
+TIMEZONE_ABBREVIATIONS = {
+    "America/New_York": "EST",
+    "America/Detroit": "EST",
+    "America/Indiana/Indianapolis": "EST",
+    "America/Indiana/Knox": "CST",
+    "America/Indiana/Marengo": "EST",
+    "America/Indiana/Petersburg": "EST",
+    "America/Indiana/Tell_City": "CST",
+    "America/Indiana/Vevay": "EST",
+    "America/Indiana/Vincennes": "EST",
+    "America/Indiana/Winamac": "EST",
+    "America/Kentucky/Louisville": "EST",
+    "America/Kentucky/Monticello": "EST",
+    "America/Chicago": "CST",
+    "America/Menominee": "CST",
+    "America/North_Dakota/Beulah": "CST",
+    "America/North_Dakota/Center": "CST",
+    "America/North_Dakota/New_Salem": "CST",
+    "America/Denver": "MST",
+    "America/Boise": "MST",
+    "America/Phoenix": "MST",
+    "America/Los_Angeles": "PST",
+    "America/Anchorage": "AKST",
+    "America/Juneau": "AKST",
+    "America/Metlakatla": "AKST",
+    "America/Nome": "AKST",
+    "America/Sitka": "AKST",
+    "America/Yakutat": "AKST",
+    "Pacific/Honolulu": "HST",
+}
+
 def load_nanpa():
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -58,6 +89,17 @@ NANPA = load_nanpa()
 # ========================== HELPERS ====================================
 def clean_number(n):
     return re.sub(r"\D", "", str(n))
+
+def format_phone_display(value):
+    digits = clean_number(value)
+
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+
+    if len(digits) == 10:
+        return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+
+    return str(value).strip()
 
 def split_pasted_numbers(raw_text):
     numbers = []
@@ -93,6 +135,26 @@ def clean_text(value):
     if not text or text.lower() == "nan":
         return ""
     return text
+
+def format_state(state):
+    value = clean_text(state)
+    if not value:
+        return "Unknown"
+    if len(value) == 2:
+        return US_STATE_NAMES.get(value.upper(), value.upper())
+    return value
+
+def format_timezone(timezone_value):
+    value = clean_text(timezone_value)
+    if not value:
+        return "Unknown"
+
+    timezones = [clean_text(part) for part in value.split(",") if clean_text(part)]
+    if not timezones:
+        return "Unknown"
+
+    formatted = [TIMEZONE_ABBREVIATIONS.get(tz, tz) for tz in timezones]
+    return ", ".join(dict.fromkeys(formatted))
 
 def extract_city(description, state):
     description_value = clean_text(description)
@@ -180,7 +242,8 @@ def nanpa_lookup(num):
             persist_location(pref, city, timezone)
 
     city = city or "Unknown"
-    timezone = timezone or "Unknown"
+    state = format_state(state)
+    timezone = format_timezone(timezone)
     return company, line_type, state, city, timezone
 
 def filter_by_line_type(df, selected_line_type):
@@ -282,7 +345,7 @@ if file:
         for p in df[phone_col]:
             comp, ltype, state, city, timezone = nanpa_lookup(p)
             out.append({
-                "Original": p,
+                "Original": format_phone_display(p),
                 "Cleaned": clean_number(p),
                 "Company": comp,
                 "Line Type": ltype,
@@ -329,7 +392,7 @@ if st.button("Run Paste Validation", use_container_width=True):
         for p in parsed_numbers:
             comp, ltype, state, city, timezone = nanpa_lookup(p)
             out.append({
-                "Original": p,
+                "Original": format_phone_display(p),
                 "Company": comp,
                 "Line Type": ltype,
                 "State": state,
