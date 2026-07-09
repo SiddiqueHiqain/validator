@@ -2,15 +2,11 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import re
-import sys
 from pathlib import Path
 
 # ========================== INTERNAL SETTINGS ==========================
-DB_FILE = "nanpa.db"   # Hidden - Not shown anywhere in UI
-VENV_SITE_PACKAGES = Path(__file__).resolve().parent / "venv" / "Lib" / "site-packages"
-
-if VENV_SITE_PACKAGES.exists():
-    sys.path.append(str(VENV_SITE_PACKAGES))
+BASE_DIR = Path(__file__).resolve().parent
+DB_FILE = BASE_DIR / "nanpa.db"   # Hidden - Not shown anywhere in UI
 
 try:
     import phonenumbers
@@ -337,25 +333,31 @@ st.subheader("Bulk Validator (Excel Upload)")
 file = st.file_uploader("Upload .xlsx", type=["xlsx"])
 
 if file:
-    df = pd.read_excel(file)
-    phone_col = st.selectbox("Select phone column", df.columns)
+    try:
+        df = pd.read_excel(file)
+    except ImportError:
+        st.error("Excel uploads require the `openpyxl` package to be installed.")
+        df = None
 
-    if st.button("Run Bulk Validation"):
-        out = []
-        for p in df[phone_col]:
-            comp, ltype, state, city, timezone = nanpa_lookup(p)
-            out.append({
-                "Original": format_phone_display(p),
-                "Cleaned": clean_number(p),
-                "Company": comp,
-                "Line Type": ltype,
-                "State": state,
-                "City": city,
-                "Timezone": timezone,
-                "Is_VoIP": yes_no(detect_voip(comp, ltype))
-            })
+    if df is not None:
+        phone_col = st.selectbox("Select phone column", df.columns)
 
-        st.session_state["bulk_validation_results"] = pd.DataFrame(out)
+        if st.button("Run Bulk Validation"):
+            out = []
+            for p in df[phone_col]:
+                comp, ltype, state, city, timezone = nanpa_lookup(p)
+                out.append({
+                    "Original": format_phone_display(p),
+                    "Cleaned": clean_number(p),
+                    "Company": comp,
+                    "Line Type": ltype,
+                    "State": state,
+                    "City": city,
+                    "Timezone": timezone,
+                    "Is_VoIP": yes_no(detect_voip(comp, ltype))
+                })
+
+            st.session_state["bulk_validation_results"] = pd.DataFrame(out)
 
     render_bulk_results(
         "bulk_validation_results",
