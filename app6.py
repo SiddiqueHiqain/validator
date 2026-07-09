@@ -86,11 +86,14 @@ NANPA = load_nanpa()
 def clean_number(n):
     return re.sub(r"\D", "", str(n))
 
-def format_phone_display(value):
+def normalize_nanpa_digits(value):
     digits = clean_number(value)
-
     if len(digits) == 11 and digits.startswith("1"):
-        digits = digits[1:]
+        return digits[1:]
+    return digits
+
+def format_phone_display(value):
+    digits = normalize_nanpa_digits(value)
 
     if len(digits) == 10:
         return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
@@ -214,7 +217,7 @@ def lookup_location(num, state=""):
         return "", ""
 
 def nanpa_lookup(num):
-    c = clean_number(num)
+    c = normalize_nanpa_digits(num)
     if len(c) < 6:
         return "", "", "", "", ""
     pref = c[:6]
