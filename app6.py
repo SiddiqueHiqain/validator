@@ -111,6 +111,32 @@ def split_pasted_numbers(raw_text):
             numbers.append(cleaned_line)
     return numbers
 
+def build_validation_row(phone_value):
+    comp, ltype, state, city, timezone = nanpa_lookup(phone_value)
+    return {
+        "Original": format_phone_display(phone_value),
+        "Cleaned": clean_number(phone_value),
+        "Company": comp,
+        "Line Type": ltype,
+        "State": state,
+        "City": city,
+        "Timezone": timezone,
+        "Is_VoIP": yes_no(detect_voip(comp, ltype))
+    }
+
+def deduplicate_results(rows):
+    if not rows:
+        return pd.DataFrame(), 0
+
+    df = pd.DataFrame(rows)
+    dedupe_key = df["Cleaned"].fillna("").astype(str).str.strip()
+    fallback_key = df["Original"].fillna("").astype(str).str.strip()
+    df["_dedupe_key"] = dedupe_key.where(dedupe_key != "", fallback_key)
+
+    deduped = df.drop_duplicates(subset="_dedupe_key", keep="first").drop(columns="_dedupe_key")
+    duplicates_filtered = len(df) - len(deduped)
+    return deduped, duplicates_filtered
+
 def build_download_file(df, base_name):
     csv_data = df.to_csv(index=False).encode("utf-8")
     return csv_data, f"{base_name}.csv", "text/csv", None
@@ -340,6 +366,7 @@ def render_bulk_results(results_key, filter_key, download_label, base_name, max_
     final = st.session_state.get(results_key)
     if final is None or final.empty:
         return
+    duplicates_filtered = st.session_state.get(f"{results_key}_duplicates_filtered", 0)
 
     line_type_options = ["All"] + sorted(
         value for value in final["Line Type"].fillna("").unique() if str(value).strip()
@@ -380,6 +407,8 @@ def render_bulk_results(results_key, filter_key, download_label, base_name, max_
             file_name=download_name,
             mime=mime_type
         )
+
+    st.caption(f"Duplicates filtered: {duplicates_filtered}")
 
 # ========================== UI SETTINGS =================================
 st.set_page_config(page_title="HiQain Validator", layout="centered")
@@ -444,19 +473,11 @@ if file:
         if st.button("Run Bulk Validation"):
             out = []
             for p in df[phone_col]:
-                comp, ltype, state, city, timezone = nanpa_lookup(p)
-                out.append({
-                    "Original": format_phone_display(p),
-                    "Cleaned": clean_number(p),
-                    "Company": comp,
-                    "Line Type": ltype,
-                    "State": state,
-                    "City": city,
-                    "Timezone": timezone,
-                    "Is_VoIP": yes_no(detect_voip(comp, ltype))
-                })
+                out.append(build_validation_row(p))
 
-            st.session_state["bulk_validation_results"] = pd.DataFrame(out)
+            deduped_results, duplicates_filtered = deduplicate_results(out)
+            st.session_state["bulk_validation_results"] = deduped_results
+            st.session_state["bulk_validation_results_duplicates_filtered"] = duplicates_filtered
 
     render_bulk_results(
         "bulk_validation_results",
@@ -491,18 +512,11 @@ if st.button("Run Paste Validation", use_container_width=True):
     else:
         out = []
         for p in parsed_numbers:
-            comp, ltype, state, city, timezone = nanpa_lookup(p)
-            out.append({
-                "Original": format_phone_display(p),
-                "Company": comp,
-                "Line Type": ltype,
-                "State": state,
-                "City": city,
-                "Timezone": timezone,
-                "Is_VoIP": yes_no(detect_voip(comp, ltype))
-            })
+            out.append(build_validation_row(p))
 
-        st.session_state["paste_validation_results"] = pd.DataFrame(out)
+        deduped_results, duplicates_filtered = deduplicate_results(out)
+        st.session_state["paste_validation_results"] = deduped_results
+        st.session_state["paste_validation_results_duplicates_filtered"] = duplicates_filtered
 
 render_bulk_results(
     "paste_validation_results",
