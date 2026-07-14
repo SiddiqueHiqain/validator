@@ -471,13 +471,14 @@ if file:
         phone_col = st.selectbox("Select phone column", df.columns)
 
         if st.button("Run Bulk Validation"):
-            out = []
-            for p in df[phone_col]:
-                out.append(build_validation_row(p))
+            with st.spinner("Processing uploaded numbers..."):
+                out = []
+                for p in df[phone_col]:
+                    out.append(build_validation_row(p))
 
-            deduped_results, duplicates_filtered = deduplicate_results(out)
-            st.session_state["bulk_validation_results"] = deduped_results
-            st.session_state["bulk_validation_results_duplicates_filtered"] = duplicates_filtered
+                deduped_results, duplicates_filtered = deduplicate_results(out)
+                st.session_state["bulk_validation_results"] = deduped_results
+                st.session_state["bulk_validation_results_duplicates_filtered"] = duplicates_filtered
 
     render_bulk_results(
         "bulk_validation_results",
@@ -490,7 +491,7 @@ if file:
 # ========================== PASTE BULK VALIDATOR =======================
 st.write("---")
 st.subheader("Paste & Validate Numbers")
-st.caption("Paste up to 500 phone numbers, one per line, and validate them instantly.")
+st.caption("Paste as many phone numbers as you want, one per line, and validate them instantly.")
 
 pasted_numbers = st.text_area(
     "Paste phone numbers here",
@@ -507,16 +508,15 @@ else:
 if st.button("Run Paste Validation", use_container_width=True):
     if not parsed_numbers:
         st.warning("Please paste at least one phone number.")
-    elif len(parsed_numbers) > 500:
-        st.warning("Please limit pasted input to 500 phone numbers at a time.")
     else:
-        out = []
-        for p in parsed_numbers:
-            out.append(build_validation_row(p))
+        with st.spinner(f"Processing {len(parsed_numbers)} phone number(s)..."):
+            out = []
+            for p in parsed_numbers:
+                out.append(build_validation_row(p))
 
-        deduped_results, duplicates_filtered = deduplicate_results(out)
-        st.session_state["paste_validation_results"] = deduped_results
-        st.session_state["paste_validation_results_duplicates_filtered"] = duplicates_filtered
+            deduped_results, duplicates_filtered = deduplicate_results(out)
+            st.session_state["paste_validation_results"] = deduped_results
+            st.session_state["paste_validation_results_duplicates_filtered"] = duplicates_filtered
 
 render_bulk_results(
     "paste_validation_results",
