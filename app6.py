@@ -111,6 +111,20 @@ def split_pasted_numbers(raw_text):
             numbers.append(cleaned_line)
     return numbers
 
+def load_bulk_file(uploaded_file):
+    suffix = Path(uploaded_file.name).suffix.lower()
+
+    if suffix == ".csv":
+        return pd.read_csv(uploaded_file)
+
+    if suffix == ".xlsx":
+        try:
+            return pd.read_excel(uploaded_file)
+        except ImportError as exc:
+            raise RuntimeError("Excel uploads require the `openpyxl` package to be installed.") from exc
+
+    raise RuntimeError("Unsupported file type. Please upload a CSV or XLSX file.")
+
 def build_validation_row(phone_value):
     comp, ltype, state, city, timezone = nanpa_lookup(phone_value)
     return {
@@ -123,6 +137,29 @@ def build_validation_row(phone_value):
         "Timezone": timezone,
         "Is_VoIP": yes_no(detect_voip(comp, ltype))
     }
+
+def process_numbers_with_progress(phone_values, progress_label):
+    total = len(phone_values)
+    progress_container = st.empty()
+    progress_bar = progress_container.progress(0)
+    status = st.empty()
+    results = []
+
+    if total == 0:
+        progress_bar.progress(100)
+        progress_container.empty()
+        status.empty()
+        return results
+
+    for index, phone_value in enumerate(phone_values, start=1):
+        results.append(build_validation_row(phone_value))
+        progress = int(index / total * 100)
+        progress_bar.progress(progress)
+        status.write(f"{progress_label} {index} of {total} phone number(s)... {progress}%")
+
+    progress_container.empty()
+    status.empty()
+    return results
 
 def deduplicate_results(rows):
     if not rows:
@@ -421,6 +458,15 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+div[data-testid="stFileUploaderDropzoneInstructions"] > div > span:last-child,
+div[data-testid="stFileUploaderDropzoneInstructions"] small {
+    display: none;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ========================== SINGLE SEARCH (Veriphone style) =============
 st.write("")
 st.write("")
@@ -456,29 +502,27 @@ if st.button("Validate Number", use_container_width=True):
 
 # ========================== BATCH (Optional) ============================
 st.write("---")
-st.subheader("Bulk Validator (Excel Upload)")
+st.subheader("Bulk Validator (CSV / Excel Upload)")
 
-file = st.file_uploader("Upload .xlsx", type=["xlsx"])
+file = st.file_uploader("Upload CSV or XLSX", type=["csv", "xlsx"])
 
 if file:
     try:
-        df = pd.read_excel(file)
-    except ImportError:
-        st.error("Excel uploads require the `openpyxl` package to be installed.")
+        df = load_bulk_file(file)
+    except RuntimeError as exc:
+        st.error(str(exc))
         df = None
 
     if df is not None:
         phone_col = st.selectbox("Select phone column", df.columns)
 
         if st.button("Run Bulk Validation"):
-            with st.spinner("Processing uploaded numbers..."):
-                out = []
-                for p in df[phone_col]:
-                    out.append(build_validation_row(p))
+            phone_values = df[phone_col].tolist()
+            out = process_numbers_with_progress(phone_values, "Processing uploaded numbers:")
 
-                deduped_results, duplicates_filtered = deduplicate_results(out)
-                st.session_state["bulk_validation_results"] = deduped_results
-                st.session_state["bulk_validation_results_duplicates_filtered"] = duplicates_filtered
+            deduped_results, duplicates_filtered = deduplicate_results(out)
+            st.session_state["bulk_validation_results"] = deduped_results
+            st.session_state["bulk_validation_results_duplicates_filtered"] = duplicates_filtered
 
     render_bulk_results(
         "bulk_validation_results",
@@ -509,14 +553,11 @@ if st.button("Run Paste Validation", use_container_width=True):
     if not parsed_numbers:
         st.warning("Please paste at least one phone number.")
     else:
-        with st.spinner(f"Processing {len(parsed_numbers)} phone number(s)..."):
-            out = []
-            for p in parsed_numbers:
-                out.append(build_validation_row(p))
+        out = process_numbers_with_progress(parsed_numbers, "Processing pasted numbers:")
 
-            deduped_results, duplicates_filtered = deduplicate_results(out)
-            st.session_state["paste_validation_results"] = deduped_results
-            st.session_state["paste_validation_results_duplicates_filtered"] = duplicates_filtered
+        deduped_results, duplicates_filtered = deduplicate_results(out)
+        st.session_state["paste_validation_results"] = deduped_results
+        st.session_state["paste_validation_results_duplicates_filtered"] = duplicates_filtered
 
 render_bulk_results(
     "paste_validation_results",

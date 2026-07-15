@@ -1,0 +1,4 @@
+[server]
+# Streamlit requires a numeric upload cap, so we set this high enough to
+# effectively remove the 200MB default limit for this app.
+maxUploadSize = 1048576
