@@ -4,7 +4,6 @@ import sqlite3
 import re
 import json
 from pathlib import Path
-from urllib.parse import quote
 import streamlit.components.v1 as components
 
 # ========================== INTERNAL SETTINGS ==========================
@@ -319,84 +318,68 @@ def filter_by_line_type(df, selected_line_type):
         return df
     return df[df["Line Type"] == selected_line_type]
 
-def render_action_buttons(download_label, download_name, download_data, copy_label, copy_text, button_key):
-    download_button_id = f"download-btn-{button_key}"
+def render_copy_button(copy_label, copy_text, button_key):
     button_id = f"copy-btn-{button_key}"
-    status_id = f"copy-status-{button_key}"
-    encoded_download = quote(download_data.decode("utf-8"))
+    wrapper_id = f"copy-wrapper-{button_key}"
     escaped_copy_text = json.dumps(copy_text)
 
     components.html(
         f"""
-        <div style="display:flex; flex-direction:column; gap:6px;">
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:24px; align-items:stretch;">
-                <button
-                    id="{download_button_id}"
-                    type="button"
-                    style="
-                        width:100%;
-                        min-height:38px;
-                        padding:0.6rem 0.75rem;
-                        border-radius:0.5rem;
-                        border:1px solid rgba(250, 250, 250, 0.2);
-                        background:rgb(38, 39, 48);
-                        color:#fafafa;
-                        font-weight:600;
-                        cursor:pointer;
-                        box-sizing:border-box;
-                    "
-                >
-                    {download_label}
-                </button>
-                <button
-                    id="{button_id}"
-                    type="button"
-                    style="
-                        width:100%;
-                        min-height:38px;
-                        padding:0.6rem 0.75rem;
-                        border-radius:0.5rem;
-                        border:1px solid rgba(250, 250, 250, 0.2);
-                        background:transparent;
-                        color:#fafafa;
-                        font-weight:600;
-                        cursor:pointer;
-                        box-sizing:border-box;
-                    "
-                >
-                    {copy_label}
-                </button>
-            </div>
-            <div id="{status_id}" style="color:#9ca3af; font-size:0.85rem;"></div>
+        <style>
+            #{wrapper_id} {{
+                --btn-bg-secondary: #ffffff;
+                --btn-border-secondary: #d1d5db;
+                --btn-text-secondary: #111827;
+            }}
+
+            @media (prefers-color-scheme: dark) {{
+                #{wrapper_id} {{
+                    --btn-bg-secondary: transparent;
+                    --btn-border-secondary: rgba(250, 250, 250, 0.2);
+                    --btn-text-secondary: #fafafa;
+                }}
+            }}
+        </style>
+        <div id="{wrapper_id}">
+            <button
+                id="{button_id}"
+                type="button"
+                style="
+                    width:100%;
+                    min-height:38px;
+                    padding:0.6rem 0.75rem;
+                    border-radius:0.5rem;
+                    border:1px solid var(--btn-border-secondary);
+                    background:var(--btn-bg-secondary);
+                    color:var(--btn-text-secondary);
+                    font-weight:600;
+                    cursor:pointer;
+                    box-sizing:border-box;
+                "
+            >
+                {copy_label}
+            </button>
         </div>
         <script>
-            const downloadButton = document.getElementById("{download_button_id}");
             const button = document.getElementById("{button_id}");
-            const status = document.getElementById("{status_id}");
             const textToCopy = {escaped_copy_text};
-            const downloadUrl = "data:text/csv;charset=utf-8,{encoded_download}";
-            const downloadName = "{download_name}";
-
-            downloadButton.addEventListener("click", () => {{
-                const link = document.createElement("a");
-                link.href = downloadUrl;
-                link.download = downloadName;
-                document.body.appendChild(link);
-                link.click();
-                link.remove();
-            }});
+            const originalLabel = {json.dumps(copy_label)};
 
             button.addEventListener("click", async () => {{
                 try {{
                     await navigator.clipboard.writeText(textToCopy);
-                    status.textContent = "Copied to clipboard";
+                    button.textContent = "Copied";
                 }} catch (error) {{
-                    status.textContent = "Copy failed";
+                    button.textContent = "Copy failed";
                 }}
+
+                window.setTimeout(() => {{
+                    button.textContent = originalLabel;
+                }}, 1600);
             }});
         </script>
         """,
-        height=82,
+        height=46,
     )
 
 def render_bulk_results(results_key, filter_key, download_label, base_name, max_rows=None, copy_label=None):
@@ -427,25 +410,30 @@ def render_bulk_results(results_key, filter_key, download_label, base_name, max_
         }
     )
 
+    st.caption(f"Duplicates filtered: {duplicates_filtered}")
+
     download_data, download_name, mime_type, _ = build_download_file(filtered, base_name)
-    if copy_label:
-        render_action_buttons(
-            download_label,
-            download_name,
-            download_data,
-            copy_label,
-            build_copy_text(filtered),
-            results_key
-        )
-    else:
+    button_columns = st.columns(3, vertical_alignment="bottom")
+
+    with button_columns[0]:
         st.download_button(
             download_label,
             data=download_data,
             file_name=download_name,
-            mime=mime_type
+            mime=mime_type,
+            use_container_width=True
         )
 
-    st.caption(f"Duplicates filtered: {duplicates_filtered}")
+    with button_columns[1]:
+        if copy_label:
+            render_copy_button(copy_label, build_copy_text(filtered), results_key)
+
+    with button_columns[2]:
+        if st.button("Clear Results", key=f"clear-{results_key}", use_container_width=True):
+            st.session_state.pop(results_key, None)
+            st.session_state.pop(f"{results_key}_duplicates_filtered", None)
+            st.session_state.pop(filter_key, None)
+            st.rerun()
 
 # ========================== UI SETTINGS =================================
 st.set_page_config(page_title="HiQain Validator", layout="centered")
