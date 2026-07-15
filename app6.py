@@ -113,15 +113,47 @@ def split_pasted_numbers(raw_text):
 def clear_paste_input():
     st.session_state["paste_numbers_input"] = ""
 
+def looks_like_phone_series(values):
+    non_empty_values = [str(value).strip() for value in values if str(value).strip()]
+    if not non_empty_values:
+        return False
+
+    phone_like_count = 0
+    for value in non_empty_values:
+        digits = normalize_nanpa_digits(value)
+        if len(digits) == 10:
+            phone_like_count += 1
+
+    return phone_like_count == len(non_empty_values)
+
+def normalize_bulk_dataframe(df):
+    if df.empty:
+        column_values = [str(column).strip() for column in df.columns]
+        if looks_like_phone_series(column_values):
+            return pd.DataFrame({"Phone": column_values})
+        return df
+
+    unnamed_columns = [str(column).lower().startswith("unnamed:") for column in df.columns]
+    if unnamed_columns and all(unnamed_columns):
+        flattened_values = [
+            str(value).strip()
+            for value in df.to_numpy().flatten()
+            if str(value).strip() and str(value).strip().lower() != "nan"
+        ]
+        if looks_like_phone_series(flattened_values):
+            return pd.DataFrame({"Phone": flattened_values})
+
+    return df
+
 def load_bulk_file(uploaded_file):
     suffix = Path(uploaded_file.name).suffix.lower()
 
     if suffix == ".csv":
-        return pd.read_csv(uploaded_file)
+        return normalize_bulk_dataframe(pd.read_csv(uploaded_file))
 
     if suffix == ".xlsx":
         try:
-            return pd.read_excel(uploaded_file)
+            return normalize_bulk_dataframe(pd.read_excel(uploaded_file))
         except ImportError as exc:
             raise RuntimeError("Excel uploads require the `openpyxl` package to be installed.") from exc
 
@@ -513,7 +545,8 @@ if file:
         "bulk_line_type_filter",
         "Download Results",
         "hiqain_validated",
-        max_rows=200
+        max_rows=200,
+        copy_label="Copy Results"
     )
 
 # ========================== PASTE BULK VALIDATOR =======================
