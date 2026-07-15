@@ -110,6 +110,9 @@ def split_pasted_numbers(raw_text):
             numbers.append(cleaned_line)
     return numbers
 
+def clear_paste_input():
+    st.session_state["paste_numbers_input"] = ""
+
 def load_bulk_file(uploaded_file):
     suffix = Path(uploaded_file.name).suffix.lower()
 
@@ -413,7 +416,7 @@ def render_bulk_results(results_key, filter_key, download_label, base_name, max_
     st.caption(f"Duplicates filtered: {duplicates_filtered}")
 
     download_data, download_name, mime_type, _ = build_download_file(filtered, base_name)
-    button_columns = st.columns(3, vertical_alignment="bottom")
+    button_columns = st.columns(2, vertical_alignment="bottom")
 
     with button_columns[0]:
         st.download_button(
@@ -427,13 +430,6 @@ def render_bulk_results(results_key, filter_key, download_label, base_name, max_
     with button_columns[1]:
         if copy_label:
             render_copy_button(copy_label, build_copy_text(filtered), results_key)
-
-    with button_columns[2]:
-        if st.button("Clear Results", key=f"clear-{results_key}", use_container_width=True):
-            st.session_state.pop(results_key, None)
-            st.session_state.pop(f"{results_key}_duplicates_filtered", None)
-            st.session_state.pop(filter_key, None)
-            st.rerun()
 
 # ========================== UI SETTINGS =================================
 st.set_page_config(page_title="HiQain Validator", layout="centered")
@@ -529,6 +525,7 @@ pasted_numbers = st.text_area(
     "Paste phone numbers here",
     height=220,
     placeholder="2135551212\n(213) 555-1212\n+1 213 555 1212",
+    key="paste_numbers_input"
 )
 
 if pasted_numbers:
@@ -537,7 +534,20 @@ if pasted_numbers:
 else:
     parsed_numbers = []
 
-if st.button("Run Paste Validation", use_container_width=True):
+paste_action_columns = st.columns(2)
+
+with paste_action_columns[0]:
+    run_paste_validation = st.button("Run Paste Validation", use_container_width=True)
+
+with paste_action_columns[1]:
+    st.button(
+        "Clear",
+        key="clear-paste-input",
+        use_container_width=True,
+        on_click=clear_paste_input
+    )
+
+if run_paste_validation:
     if not parsed_numbers:
         st.warning("Please paste at least one phone number.")
     else:
